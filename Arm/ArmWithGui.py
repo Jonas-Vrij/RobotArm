@@ -2,7 +2,12 @@ from tkinter import *
 import math
 import serial.tools.list_ports
 import threading
+from Pathplanning import findPath
+from Pathplanning import addWall
+from Pathplanning import createNodes
 
+endX = 0
+endY = 0
 ports = serial.tools.list_ports.comports()
 serialInst = serial.Serial()
 portsList = []
@@ -33,13 +38,11 @@ def returnAngles(xCoord, yCoord, drawLines, inverse):
         angle_A = 360 - angle_C
         angle_B = 360 - angle_B
 
-
     outStr = f"{round(angle_A)}_{round(angle_B)}_{slider.get()}"
     if drawLines:
         updateLines(round(angle_A), round(angle_B))
 
     return outStr
-
 
 
 def orientation(p, q, r):
@@ -89,55 +92,10 @@ def drag_start(event):
 
 
 def drag_motion(event):
-    global inverseAngles
-    updated = False
+    global endAngle, inverseAngles, endX, endY
     pX = label.winfo_x() - label.startX + event.x
     y = label.winfo_y() - label.startY + event.y
-    angles = returnAngles(pX, 500 - y, False, False).split('_')
-    foreArmPoints = draw_rotated_line(None, None, a, 0, 500, int(angles[0]), False)
-    foreArmPoints = [(0, 0), (foreArmPoints[0], 500 - foreArmPoints[1])]
-    armPoints = [(foreArmPoints[1][0], foreArmPoints[1][1]), (pX, 500 - y)]
-    # check for Minimal value if arms arnt same length
-    if a != c:
-        if (pX ** 2) + ((500 - y) ** 2) < (a - c) ** 2:
-            return 0
-    if (pX ** 2) + ((500 - y) ** 2) > (a + c) ** 2:
-        return 0
-    # check if arms cross with obstacle
-    for i in obstructions:
-        if line_crosses_square(i, foreArmPoints):
-            inverseAngles = True
-            break
-        else:
-            inverseAngles = False
-            if line_crosses_square(i, armPoints):
-                inverseAngles = True
-                break
-            else:
-                inverseAngles = False
-
-    if inverseAngles:
-        angles = returnAngles(pX, 500 - y, False, True).split('_')
-        foreArmPoints = draw_rotated_line(None, None, a, 0, 500, int(angles[0]), False)
-        foreArmPoints = [(0, 0), (foreArmPoints[0], 500 - foreArmPoints[1])]
-        armPoints = [(foreArmPoints[1][0], foreArmPoints[1][1]), (pX, 500 - y)]
-        for i in obstructions:
-            if line_crosses_square(i, foreArmPoints):
-                return 0
-            if line_crosses_square(i, armPoints):
-                return 0
-    returnAngles(pX, 500-y, True, inverseAngles)
-    label.place(x=pX, y=y)
-    label.lift()
-    # Update the coordinates label text
-    coordinates_label.config(text=f"({pX}, {500 - y})")
-    coordinates_label.place(x=pX, y=y - 20)
-    if '-' in angles[0]:
-        x = angles[0].replace('-','')
-        f = 180 + int(a) - int(angles[1])
-    else: f = 180 - int(angles[0]) - int(angles[1])
-    anglesLabel.config(text=f"A:{angles[0]}, B:{angles[1]}, C:{f}")
-
+    updateCoords(pX, y)
 
 def updateCoords(pX, y):
     global inverseAngles
@@ -146,7 +104,16 @@ def updateCoords(pX, y):
     foreArmPoints = [(0, 0), (foreArmPoints[0], 500 - foreArmPoints[1])]
     armPoints = [(foreArmPoints[1][0], foreArmPoints[1][1]), (pX, 500 - y)]
 
+    # check for Minimal value if arms arnt same length
+    if a != c:
+        if (pX ** 2) + ((500 - y) ** 2) < (a - c) ** 2:
+            return 0
+    if (pX ** 2) + ((500 - y) ** 2) > (a + c) ** 2:
+        return 0
+
+    # check if arms cross with obstacles
     for i in obstructions:
+        global endX, endY
         if line_crosses_square(i, foreArmPoints):
             inverseAngles = True
             break
@@ -169,14 +136,16 @@ def updateCoords(pX, y):
             if line_crosses_square(i, armPoints):
                 print("Point not in Range!")
                 return 0
-    label.place(x=pX, y=y)
+    returnAngles(pX, 500 - y, True, inverseAngles)
+    label.place(x=pX - 10, y=y - 10)
     label.lift()
     # Update the coordinates label text
+    endX, endY = [pX, 500 - y]
     coordinates_label.config(text=f"({pX}, {500 - y})")
-    coordinates_label.place(x=pX, y=y - 20)
+    coordinates_label.place(x=pX - 10, y=y - 30)
 
-    angles = returnAngles(pX, 500 - y,True, inverseAngles).split('_')
-    anglesLabel.config(text=f"A:{angles[0]}, B:{angles[1]}, C:{180 - int(angles[0]) - int(angles[1])}")
+    angles = returnAngles(pX, 500 - y, True, inverseAngles).split('_')
+    anglesLabel.config(text=f"A:{angles[0]}, B:{angles[1]}, C:{endAngle+facing_slider.get()}")
 
 
 def draw_rotated_line(pCanvas, line_id, length, pX, y, angle, draw):
@@ -200,6 +169,7 @@ def draw_rotated_line(pCanvas, line_id, length, pX, y, angle, draw):
 def updateLines(alpha, beta):
     elbowCoord = draw_rotated_line(canvas, arm, c, 5, 500, alpha, True)
     draw_rotated_line(canvas, foreArm, a, elbowCoord[0], elbowCoord[1], 180 + alpha + beta, True)
+    updateFacing(180 + alpha + beta)
 
 
 def resetPos():
@@ -212,12 +182,13 @@ def resetPos():
 
 
 def changePos():
-    try:
-        pX, y = entry.get().split(',')
-        updateCoords(int(pX), 500 - int(y))
-    except:
-        print("No Valid Input!")
-        pass
+    # try:
+    pX, y = entry.get().split(',')
+    planPath(int(pX), int(y))
+    updateCoords(int(pX), 500 - int(y))
+    # except:
+    print("No Valid Input!")
+    pass
 
 
 def loopToZero(num):
@@ -225,6 +196,18 @@ def loopToZero(num):
         slider.set(0)
     elif num == -1:
         slider.set(359)
+
+
+endAngle = 0
+
+
+def updateFacing(angle):
+    global endAngle
+    global endX, endY
+    if angle is not None:
+        endAngle = angle
+    num = endAngle + facing_slider.get()
+    draw_rotated_line(canvas, facingLine, 60, endX, 500 - endY, num, True)
 
 
 def executePeriodically():
@@ -243,6 +226,25 @@ def toggle_saving_mode():
     saving_mode = not saving_mode
 
 
+def planPath(goalX, goalY):
+    smallGoal = (goalX // 10, goalY // 10)
+    smallStart = (endX // 10, (endY) // 10)
+    print(f"findPath({smallGoal}, {smallStart})")
+    findPath(smallGoal, smallStart)
+
+
+def addObstacleAsWalls(point1, point2):
+    out = []
+    newPoint1 = (point1[0] // 10, point1[1] // 10)
+    newPoint2 = (point2[0] // 10, point2[1] // 10)
+    for x in range(newPoint1[0], newPoint1[1] + 1):
+        for y in range(newPoint2[0], newPoint2[1] + 1):
+            nodeName = f"Node{x}{y}"
+            out.append(nodeName)
+    for i in out:
+        print(f"Coord {i}, I am a motherfucker")
+        addWall(i)
+
 
 def canvas_click(event):
     global clickCounter
@@ -251,17 +253,23 @@ def canvas_click(event):
     global inbetweenCoords
     if saving_mode:
         x_coord = event.x
-        y_coord = 500 - event.y
+        y_coord = event.y
         clickCounter += 1
         if clickCounter == 1:
             inbetweenCoords = (x_coord, y_coord)
     if clickCounter == 2:
         saving_mode = False
         clickCounter = 0
-        obstructions += [[(event.x,500 - event.y), (inbetweenCoords[0], 500 - event.y), (inbetweenCoords[0], inbetweenCoords[1]),
-                         (event.x, inbetweenCoords[1])
-                         ]]
-        canvas.create_rectangle(inbetweenCoords[0], -(inbetweenCoords[1]-500), event.x,event.y, fill="DeepSkyBlue", outline="blue", tags="obstacle")  # Set outline to empty string for no border
+        obstructions += [
+            [(event.x, 500 - event.y), (inbetweenCoords[0], 500 - event.y),
+             (inbetweenCoords[0], 500 - inbetweenCoords[1]),
+             (event.x, 500 - inbetweenCoords[1])
+             ]]
+        canvas.create_rectangle(inbetweenCoords[0], inbetweenCoords[1], event.x, event.y,
+                                fill="DeepSkyBlue", outline="blue",
+                                tags="obstacle")  # Set outline to empty string for no border
+        point2 = (event.x, event.y)
+        addObstacleAsWalls(inbetweenCoords, point2)
 
 
 obstructions = []
@@ -293,6 +301,7 @@ if input("Arduino? y/n: ") == "y":
 window = Tk()
 window.title("Moving Lines")
 window.geometry("800x550")
+createNodes(80, 55)
 # Create a Canvas widget
 canvas = Canvas(window, width=5000, height=5000)
 canvas.pack()
@@ -306,8 +315,9 @@ radius = abs(a - c)
 canvas.create_oval(center_x - radius, center_y - radius, center_x + radius, center_y + radius, outline="gray", width=2)
 # Draw the initial lines
 arm = canvas.create_line(0, 500, c, 500, fill='red', width=2)
-foreArm = canvas.create_line(c, 500, c + a, 500, fill='green', width=2)
+foreArm = canvas.create_line(c, 500, c + a, 500, fill='blue', width=2)
 achse = canvas.create_line(0, 500, 1000000, 500, fill="black", width=2)
+facingLine = canvas.create_line(0, 500, 20, 500, fill='green', width=2)
 # Place the canvas in the background
 canvas.place(relx=0, rely=0)
 
@@ -327,6 +337,11 @@ change.place(x=0, y=80)
 slider = Scale(window, length=300, from_=-1, to=360, orient="horizontal", command=loopToZero)
 slider.config(command=lambda num: (loopToZero(int(num))))
 slider.place(x=500, y=0)
+
+# facing direction slider
+facing_slider = Scale(window, length=300, from_=90, to=-90, orient="vertical", command=updateFacing)
+facing_slider.config(command=lambda num: (updateFacing(None)))
+facing_slider.place(x=750, y=40)
 
 # create new obstruction box
 toggle_button = Button(window, text="create Obstacle", command=toggle_saving_mode)
